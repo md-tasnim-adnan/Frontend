@@ -1,7 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
+import ReactFlow, {
+  ReactFlowProvider,
+  addEdge,
+  removeElements,
+  isNode,
+} from 'react-flow-renderer';
+import dagre from 'dagre';
 import Graph from "react-graph-vis";
 
-import {buildActionSetToShift, buildActionChangeParent} from './../../redux/Actions';
+
+import {buildActionSetToShift, buildActionChangeParent, buildActionDeleteNode} from './../../redux/Actions';
 import {store} from './../../../../../../../../index';
 
 import SituationNode from './../../data/entity/SituationNode';
@@ -14,67 +22,83 @@ const icon_url_operation_node = process.env.PUBLIC_URL + "/images/cogs.png";
 const icon_url_context_node = process.env.PUBLIC_URL + "/images/leak.png";
 
 
+
+
+const dagreGraph = new dagre.graphlib.Graph();
+dagreGraph.setDefaultEdgeLabel(() => ({}));
+
+const nodeWidth = 172;
+const nodeHeight = 36;
+
+
 function SituationTemplateUI(props) {
 
-    const graph = createGraph(null, props.root, {nodes: [], edges: []}, getSelectedNodeID(props));
+    const graphNodes = [];
+    
+    // This modifies the tree to make it react flow renderer compatible 
+    const graph = createGraph(null, props.root, graphNodes, getSelectedNodeID(props));
+    // this dynamically assigns the position value that was in the tutorial
+    const layoutedElements = getLayoutedElements(graph);
+    console.log('stateChange',graph);
+  
+    const [elements, setElements] = useState(layoutedElements);
+    
 
-    const options = {
-        layout: {
-            hierarchical: true
-        },
-        edges: {
-            color: "#000000"
-        },
-        physics: {
-            enabled: false
-        },
-        height: "780px",
-        clickToUse: false,
-        autoResize: true
-  };
+    const onConnect = (params) => {
+        console.log('connect',params);
+        setElements((els) => addEdge({ ...params, animated: true }, els));
+    }
+    
+    const onElementsRemove = (elementsToRemove) =>{
+        console.log('remove',elementsToRemove);
+        setElements((els) => removeElements(elementsToRemove, els));
 
-  const events = {
-    select: function(event) {
-        var { nodes, edges } = event;
-            if(nodes.length > 0) {
-                let selectedNodeID = nodes[0];
-                let state = store.getState();
-                if(selectedNodeID != null && state.TEMPLATING_REDUCER_NAMESPACE.modeling.toShift) {
-                    store.dispatch(buildActionChangeParent(selectedNodeID));
-                }
-                props.updateSelectedNode(selectedNodeID)
-            }
-        },
-    hold: function(event) {
-        var { nodes, edges } = event;
-            if(nodes.length > 0) {
-                store.dispatch(buildActionSetToShift());
-            }
-     }
-  };
+    }
+    const onElementClick = (event, element) => {
+        console.log('click', element);
+        let selectedNodeID = element.id;
+
+    }
+    
+ 
+   
+  
 
   return (
-    <Graph graph={graph} options={options} events={events} getNetwork={network => {}}/>
+    <div style={{height : 700}}>
+      <ReactFlowProvider>
+        <ReactFlow
+          elements={elements}
+          onElementClick={onElementClick}
+          onConnect={onConnect}
+          onElementsRemove={onElementsRemove}
+        />
+      </ReactFlowProvider>
+    </div>
   );
 }
 
-function createGraph(parent, curNode, graph, selectedNodeID) {
+function createGraph(parent, curNode, graphNodes, selectedNodeID) {
+     
     if(curNode != null) {
         let curNodeID = curNode.getNodeId();
         let curNodeName = curNode.getNodeName();
         let node = buildVISNode(curNode, selectedNodeID);
-        graph.nodes.push(node);
+        graphNodes.push(node);
         if(parent != null) {
             let parentNodeID = parent.getNodeId();
-            let edge = {from: curNodeID, to: parentNodeID, physics: true };
-            graph.edges.push(edge);
+            let edge = {id: 'e'+parentNodeID+'-'+curNodeID,source: parentNodeID,target: curNodeID, animated: true };
+            graphNodes.push(edge);
         }
         let curNodeChildrenArr = curNode.getChildren();
         for(let index = 0; index < curNodeChildrenArr.length; index++) {
-            createGraph(curNode, curNodeChildrenArr[index], graph, selectedNodeID);
+            createGraph(curNode, curNodeChildrenArr[index], graphNodes, selectedNodeID);
+            
         }
+
     }
-    return graph;
+    
+    return graphNodes;
 }
 
 function buildVISNode(curNode, selectedNodeID) {
@@ -82,24 +106,11 @@ function buildVISNode(curNode, selectedNodeID) {
     if(curNode != null) {
         let curNodeID = curNode.getNodeId();
         let curNodeName = curNode.getNodeName();
-        node = {id: curNodeID, label: curNodeName, title: curNodeName, shape: 'image'};
+        node = {id: curNodeID, data: { label: curNodeName }, position: { x: 100, y: 125 }};
         if(curNode.type === "situationNode") {
-            node.image = icon_url_situation_node;
+            node.type = 'input';
         }
-        else if(curNode.type === "operationNode") {
-            node.image = icon_url_operation_node;
-        }
-        else {
-            node.image = icon_url_context_node;
-        }
-        if(selectedNodeID == curNode.getNodeId()) {
-            node.font = {};
-            node.font.color="#f50057";
-        }
-        else {
-            node.font = {};
-            node.font.color = "black";
-        }
+        
     }
     return node;
 }
@@ -111,7 +122,38 @@ function getSelectedNodeID(props) {
         selectedNodeID = selectedNode.getNodeId();
     }
     return selectedNodeID;
-}
+} 
 
+
+const getLayoutedElements = (elements, direction = 'TB') => {
+    
+    dagreGraph.setGraph({ rankdir: direction });
+  
+    elements.forEach((el) => {
+      if (isNode(el)) {
+        dagreGraph.setNode(el.id, { width: nodeWidth, height: nodeHeight });
+      } else {
+        dagreGraph.setEdge(el.source, el.target);
+      }
+    });
+  
+    dagre.layout(dagreGraph);
+  
+    return elements.map((el) => {
+      if (isNode(el)) {
+        const nodeWithPosition = dagreGraph.node(el.id);
+        el.targetPosition = 'top';
+        el.sourcePosition = 'bottom';
+  
+        
+        el.position = {
+          x: nodeWithPosition.x - nodeWidth / 2 + Math.random() / 1000,
+          y: nodeWithPosition.y - nodeHeight / 2,
+        };
+      }
+  
+      return el;
+    });
+  };
 
 export default SituationTemplateUI;
